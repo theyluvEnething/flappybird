@@ -123,8 +123,20 @@ function togglePause(game) {
   else if (game.phase === "paused") game.phase = "playing";
 }
 
+function createRecording(game) {
+  return { version: 1, startedAt: new Date().toISOString(), fps: 120,
+    config: { ...game.config }, frames: [] };
+}
+
+function recordFrame(recording, game) {
+  const { phase, score, best, previousBest, bird, pipes, groundOffset, time, overTime, fallTime } = game;
+  recording.frames.push({ phase, score, best, previousBest, bird: { ...bird },
+    pipes: pipes.map(pipe => ({ ...pipe })), groundOffset, time, overTime, fallTime });
+}
+
 if (typeof module !== "undefined") module.exports = {
-  getGameSettings, createGame, flapGame, stepGame, resetGame, togglePause
+  getGameSettings, createGame, flapGame, stepGame, resetGame, togglePause,
+  createRecording, recordFrame
 };
 
 // A tiny bitmap font keeps the artwork self-contained and crisp offline.
@@ -391,6 +403,87 @@ function bootGame() {
   let previousTime = performance.now();
   let accumulator = 0;
   let lastStatus = "";
+  let recording;
+  let playback;
+  let playbackFrame = 0;
+  const recordingStatus = document.querySelector('#recording-status');
+  const replaySelect = document.querySelector('#replays');
+  const replayButton = document.querySelector('#watch-replay');
+  const retryButton = document.querySelector('#retry-save');
+  const pending = new Set();
+
+  async function listRecordings() {
+    try {
+      const response = await fetch('/api/recordings');
+      if (!response.ok) throw new Error();
+      const files = await response.json();
+      replaySelect.replaceChildren(new Option('Choose a recording', ''));
+      for (const file of files) replaySelect.add(new Option(file, file));
+    } catch {
+      if (['localhost', '127.0.0.1'].includes(location.hostname) && location.port !== '8766') {
+        location.replace('http://127.0.0.1:8766/');
+        return;
+      }
+      recordingStatus.textContent = 'Recording needs the local server: node server.js';
+    }
+  }
+
+  async function saveRecording(item) {
+    pending.add(item);
+    recordingStatus.textContent = 'Saving recording…';
+    try {
+      const response = await fetch('/api/recordings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(item)
+      });
+      if (!response.ok) throw new Error();
+      const { filename } = await response.json();
+      pending.delete(item);
+      recordingStatus.textContent = `Saved recordings/${filename}`;
+      await listRecordings();
+    } catch {
+      recordingStatus.textContent = 'Recording not saved. Start node server.js, then retry before closing this page.';
+    }
+    retryButton.hidden = pending.size === 0;
+  }
+
+  retryButton.addEventListener('click', () => {
+    for (const item of pending) saveRecording(item);
+  });
+
+  function newGame() {
+    playback = null;
+    recording = null;
+    game = createGame(getGameSettings(), Math.random, best);
+    paintBackground(backdrop.getContext('2d'), game.config);
+    lastStatus = '';
+    replayButton.textContent = 'Watch replay';
+    previousTime = performance.now();
+    accumulator = 0;
+    canvas.focus();
+    scheduleFrame();
+  }
+
+  replayButton.addEventListener('click', async () => {
+    if (playback) { newGame(); return; }
+    if (!replaySelect.value || !['ready', 'over'].includes(game.phase)) return;
+    try {
+      const response = await fetch('/recordings/' + encodeURIComponent(replaySelect.value));
+      if (!response.ok) throw new Error();
+      const data = await response.json();
+      if (data.version !== 1 || data.fps !== 120 || !data.frames?.length) throw new Error();
+      game = createGame(data.config);
+      playback = data;
+      playbackFrame = 0;
+      Object.assign(game, playback.frames[0]);
+      paintBackground(backdrop.getContext('2d'), game.config);
+      replayButton.textContent = 'Back to game';
+      recordingStatus.textContent = 'Watching ' + replaySelect.value;
+      previousTime = performance.now();
+      accumulator = 0;
+      scheduleFrame();
+    } catch { recordingStatus.textContent = 'Could not load this recording.'; }
+  });
+  listRecordings();
 
   function playSound(kind) {
     if (!soundOn) return;
@@ -428,6 +521,9 @@ function bootGame() {
     status.textContent = labels[game.phase];
     canvas.setAttribute("aria-label", labels[game.phase]);
     pauseButton.hidden = !["playing", "paused"].includes(game.phase);
+    if (playback) pauseButton.hidden = true;
+    replaySelect.disabled = !playback && !['ready', 'over'].includes(game.phase);
+    replayButton.disabled = replaySelect.disabled;
     pauseButton.setAttribute("aria-label", game.phase === "paused" ? "Resume game" : "Pause game");
     pauseButton.textContent = game.phase === "paused" ? "▶" : "Ⅱ";
   }
@@ -444,27 +540,52 @@ function bootGame() {
     const oldPhase = game.phase;
     // A fixed timestep makes the game behave the same at 60 Hz and 120 Hz.
     while (accumulator >= 1 / 120) {
-      stepGame(game, 1 / 120);
+      if (playback) {
+        playbackFrame = Math.min(playbackFrame + 1, playback.frames.length - 1);
+        Object.assign(game, playback.frames[playbackFrame]);
+      } else {
+        stepGame(game, 1 / 120);
+        if (recording && ['playing', 'falling', 'over'].includes(game.phase)) {
+          recordFrame(recording, game);
+          if (game.phase === 'over') {
+            recording.completed = true;
+            saveRecording(recording);
+            recording = null;
+          }
+        }
+      }
       accumulator -= 1 / 120;
     }
     if (game.score > oldScore) playSound("point");
     if (oldPhase === "playing" && ["falling", "over"].includes(game.phase)) {
       playSound("hit");
-      try { localStorage.setItem("flappybird-showcase.best", String(game.best)); } catch {}
+      if (!playback) {
+        best = game.best;
+        try { localStorage.setItem("flappybird-showcase.best", String(game.best)); } catch {}
+      }
     }
     drawGame(ctx, backdrop, game, now / 1000, motion.matches);
     updateStatus();
     const animating = ["playing", "falling"].includes(game.phase) ||
       (game.phase === "ready" && !motion.matches) || (game.phase === "over" && game.overTime < 0.8);
-    if (animating) scheduleFrame();
+    if (playback ? playbackFrame < playback.frames.length - 1 : animating) scheduleFrame();
   }
 
   function act() {
+    if (playback) return;
     if (game.phase === "over") {
       if (game.overTime < 0.65) return;
       resetGame(game);
     } else if (game.phase === "paused") togglePause(game);
-    else if (flapGame(game)) playSound("flap");
+    else if (flapGame(game)) {
+      if (!recording) {
+        recording = createRecording(game);
+        recording.id = crypto.randomUUID();
+        recordFrame(recording, game);
+        recordingStatus.textContent = 'Recording this game';
+      }
+      playSound("flap");
+    }
     previousTime = performance.now();
     accumulator = 0;
     scheduleFrame();
@@ -476,6 +597,7 @@ function bootGame() {
     act();
   });
   document.addEventListener("keydown", event => {
+    if (playback) return;
     if (event.repeat || event.target.closest("button, a, input, textarea, select")) return;
     if (["Space", "ArrowUp"].includes(event.code)) { event.preventDefault(); act(); }
     if (event.code === "KeyP") {
@@ -498,7 +620,7 @@ function bootGame() {
     scheduleFrame();
   });
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden && game.phase === "playing") togglePause(game);
+    if (!playback && document.hidden && game.phase === "playing") togglePause(game);
     if (frameRequest) cancelAnimationFrame(frameRequest);
     frameRequest = 0;
     previousTime = performance.now();
@@ -506,6 +628,13 @@ function bootGame() {
     scheduleFrame();
   });
   motion.addEventListener("change", scheduleFrame);
+  window.addEventListener('pagehide', () => {
+    const items = [...pending];
+    if (recording) items.push(recording);
+    for (const item of items) {
+      navigator.sendBeacon('/api/recordings', new Blob([JSON.stringify(item)], { type: 'application/json' }));
+    }
+  });
   document.querySelector("#version").textContent = "v" + document.querySelector('meta[name="application-version"]').content;
   scheduleFrame();
 }

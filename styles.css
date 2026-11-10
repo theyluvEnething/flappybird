@@ -15,7 +15,7 @@ body {
   padding: 20px 12px;
 }
 
-main { width: min(432px, calc((100svh - 84px) * 0.5625), calc(100vw - 24px)); }
+main { width: min(432px, max(180px, calc((100svh - 240px) * 0.5625)), calc(100vw - 24px)); }
 .playfield { position: relative; }
 
 canvas {
@@ -82,3 +82,8 @@ button:focus-visible { outline: 2px solid #f8d85a; outline-offset: 4px; }
   clip-path: inset(50%);
   white-space: nowrap;
 }
+
+.recordings { margin-top: 16px; font-size: 11px; line-height: 1.5; }
+.recordings label { display: block; margin-bottom: 6px; }
+.recordings select { max-width: 100%; width: 100%; margin-bottom: 8px; padding: 6px; font: inherit; }
+.recordings p { overflow-wrap: anywhere; color: #b3c9c0; }
