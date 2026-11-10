@@ -1,4 +1,4 @@
-# Flappybird Live
+# Flappybird
 
 A small browser game used in Philipp Gurndin's Git and GitHub classroom demonstration with Edoardo Kimani Bellotto. This repository keeps the actual lesson history so you can inspect each stage and reproduce the workflow yourself.
 
@@ -20,8 +20,8 @@ working tree   staging    local Git    GitHub
 Use a terminal with Git and a current Node.js LTS release installed. The commands below use macOS Terminal or another shell with the same basic syntax. This project has no npm dependencies and needs no `npm install`.
 
 ```sh
-git clone https://github.com/theyluvEnething/flappybird-live.git
-cd flappybird-live
+git clone https://github.com/theyluvEnething/flappybird.git
+cd flappybird
 node server.js
 ```
 
@@ -45,7 +45,7 @@ node --test replay.test.js
 ### What the files do
 
 ```text
-flappybird-live/
+flappybird/
   README.md          This guide, rendered as Markdown on GitHub
   index.html         Page, canvas, controls and links to CSS/JavaScript
   styles.css         Layout, colors and presentation
@@ -67,13 +67,13 @@ The hashes, messages and code changes below come from this repository's actual G
 
 | Step | Commit | What changed |
 | --- | --- | --- |
-| 1 | [`8e3056f`](https://github.com/theyluvEnething/flappybird-live/commit/8e3056f) | Created the initial README |
-| 2 | [`4d49d10`](https://github.com/theyluvEnething/flappybird-live/commit/4d49d10) | Added `index.html` |
-| 3 | [`dfb9a4f`](https://github.com/theyluvEnething/flappybird-live/commit/dfb9a4f) | Added `styles.css`, message: `Created Styles.css` |
-| 4 | [`d0f53ac`](https://github.com/theyluvEnething/flappybird-live/commit/d0f53ac) | Added `script.js`; the three-file game became playable |
-| 5 | [`620d8a4`](https://github.com/theyluvEnething/flappybird-live/commit/620d8a4) | Added `.gitignore`, the recording server and replay test; updated the game files for recordings |
-| 6 | [`75d691b`](https://github.com/theyluvEnething/flappybird-live/commit/75d691b) | On `fast-bird`, changed `forwardSpeed` from `120` to `240` |
-| 7 | [`d4db583`](https://github.com/theyluvEnething/flappybird-live/commit/d4db583) | On `fast-bird`, changed `forwardSpeed` from `240` to `5000` |
+| 1 | [`8e3056f`](https://github.com/theyluvEnething/flappybird/commit/8e3056f) | Created the initial README |
+| 2 | [`4d49d10`](https://github.com/theyluvEnething/flappybird/commit/4d49d10) | Added `index.html` |
+| 3 | [`dfb9a4f`](https://github.com/theyluvEnething/flappybird/commit/dfb9a4f) | Added `styles.css`, message: `Created Styles.css` |
+| 4 | [`d0f53ac`](https://github.com/theyluvEnething/flappybird/commit/d0f53ac) | Added `script.js`; the three-file game became playable |
+| 5 | [`620d8a4`](https://github.com/theyluvEnething/flappybird/commit/620d8a4) | Added `.gitignore`, the recording server and replay test; updated the game files for recordings |
+| 6 | [`75d691b`](https://github.com/theyluvEnething/flappybird/commit/75d691b) | On `fast-bird`, changed `forwardSpeed` from `120` to `240` |
+| 7 | [`d4db583`](https://github.com/theyluvEnething/flappybird/commit/d4db583) | On `fast-bird`, changed `forwardSpeed` from `240` to `5000` |
 
 ```text
 8e3056f -- 4d49d10 -- dfb9a4f -- d0f53ac -- 620d8a4
@@ -137,7 +137,7 @@ If you already cloned the project above, run these from its parent directory. Ch
 ### 1. Create a reference clone and an empty repository
 
 ```sh
-git clone https://github.com/theyluvEnething/flappybird-live.git flappybird-reference
+git clone https://github.com/theyluvEnething/flappybird.git flappybird-reference
 mkdir flappybird-practice
 cd flappybird-practice
 git init -b main
