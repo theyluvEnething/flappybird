@@ -3,7 +3,7 @@
 // Change these values during the live demo, then reload the page.
 function getGameSettings() {
   return {
-    forwardSpeed: 240, // How fast the pipes move left, in pixels per second.
+    forwardSpeed: 5000, // How fast the pipes move left, in pixels per second.
     flapSpeed: 300,    // The bird's upward speed after a flap.
     gravity: 900,      // Downward acceleration, in pixels per second squared.
     pipeGap: 108,      // Space between the upper and lower pipes.
