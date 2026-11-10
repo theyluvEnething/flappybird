@@ -3,20 +3,29 @@
 // Change these values during the live demo, then reload the page.
 function getGameSettings() {
   return {
-    forwardSpeed: 120, // How fast the pipes move left, in pixels per second.
+    forwardSpeed: 240, // How fast the pipes move left, in pixels per second.
     flapSpeed: 300,    // The bird's upward speed after a flap.
     gravity: 900,      // Downward acceleration, in pixels per second squared.
-    pipeGap: 108,      // Space between the upper and lower pipes.
+    pipeGap: 148,      // Space between the upper and lower pipes.
     pipeSpacing: 180,  // Horizontal distance between pairs of pipes.
+    rocketMode: true,
     width: 288,
     height: 512,
-    groundHeight: 112,
+    groundHeight: 32,
     birdX: 68,
     birdStartY: 200,
     birdRadius: 10,
     pipeWidth: 52
   };
 }
+
+const POWERS = {
+  jetpack: { name: 'JETPACK', hint: 'HOLD TO RISE', color: '#ffb347', duration: 6 },
+  boost: { name: 'ROCKET BOOST', hint: 'SMASH THROUGH', color: '#ff694f', duration: 3.2 },
+  shield: { name: 'ION SHIELD', hint: 'ONE HIT SAVED', color: '#69f4dc', duration: 9 },
+  slow: { name: 'TIME WARP', hint: 'TAKE A BREATH', color: '#b8a0ff', duration: 6 },
+  pulse: { name: 'NOVA PULSE', hint: 'CLEAR THE SKY', color: '#ffe586', duration: 1.2 }
+};
 
 function createGame(config = getGameSettings(), random = Math.random, best = 0) {
   const positive = ["forwardSpeed", "flapSpeed", "gravity", "pipeSpacing", "width", "height", "groundHeight", "birdRadius", "pipeWidth"];
@@ -36,7 +45,9 @@ function createGame(config = getGameSettings(), random = Math.random, best = 0) 
   return {
     config: { ...config }, random, phase: "ready", score: 0, best,
     previousBest: best, bird: { y: config.birdStartY, velocity: 0 },
-    pipes: [], groundOffset: 0, time: 0, overTime: 0, fallTime: 0
+    pipes: [], groundOffset: 0, time: 0, overTime: 0, fallTime: 0,
+    pickups: [], power: null, notice: null, debris: [], grace: 0,
+    pipeCount: 0, pickupCount: 0, thrust: false, powerSerial: 0
   };
 }
 
@@ -45,15 +56,55 @@ function addPipe(game, x) {
   const edge = 48 + c.pipeGap / 2;
   const centerY = edge + game.random() * (c.height - c.groundHeight - edge * 2);
   game.pipes.push({ x, centerY, counted: false });
+  game.pipeCount++;
+  if (c.rocketMode && game.pipeCount % 5 === 0) {
+    const types = Object.keys(POWERS);
+    game.pickups.push({ x: x + c.pipeWidth / 2, y: centerY,
+      type: types[game.pickupCount++ % types.length] });
+  }
+}
+
+function breakPipe(game, pipe) {
+  if (!pipe.counted) { game.score++; game.best = Math.max(game.best, game.score); }
+  const floor = game.config.height - game.config.groundHeight;
+  for (let i = 0; i < 12; i++) {
+    game.debris.push({ x: pipe.x + (i % 3) * 18, y: i < 6 ? pipe.centerY - 80 - i * 9 : pipe.centerY + 80 + (i - 6) * 9,
+      vx: -90 - (i % 4) * 45, vy: (i % 2 ? 1 : -1) * (40 + i * 9), life: 0.7,
+      color: i % 2 ? '#c0e765' : '#568e2e' });
+  }
+  game.debris = game.debris.filter(p => p.y > 0 && p.y < floor).slice(-60);
+  game.pipes = game.pipes.filter(p => p !== pipe);
+}
+
+function activatePower(game, type) {
+  if (!POWERS[type] || game.phase !== 'playing') return;
+  const spec = POWERS[type];
+  game.power = { type, remaining: spec.duration, duration: spec.duration };
+  game.notice = { type, label: spec.name, remaining: 1.6 };
+  game.powerSerial++;
+  game.grace = Math.max(game.grace, 0.3);
+  if (type === 'jetpack') game.bird.velocity = Math.min(game.bird.velocity, -110);
+  if (type === 'boost') game.bird.velocity = 0;
+  if (type === 'pulse') {
+    for (const pipe of [...game.pipes]) {
+      if (pipe.x < game.config.width + 40 && pipe.x + game.config.pipeWidth > game.config.birdX - 20) breakPipe(game, pipe);
+    }
+    game.grace = 1;
+  }
 }
 
 function flapGame(game) {
   if (game.phase === "ready") {
     game.phase = "playing";
-    addPipe(game, game.config.width + 60);
+    addPipe(game, game.config.birdX + 280);
+    if (game.config.rocketMode) {
+      game.pickups.push({ type: 'jetpack', x: game.config.birdX + 110, y: Math.max(48, game.config.birdStartY - 45) });
+      game.pickupCount = 1;
+    }
   }
   if (game.phase !== "playing") return false;
-  game.bird.velocity = -game.config.flapSpeed;
+  if (game.power?.type === 'boost') return false;
+  game.bird.velocity = game.power?.type === 'jetpack' ? -150 : -game.config.flapSpeed;
   return true;
 }
 
@@ -65,38 +116,93 @@ function circleTouchesRectangle(x, y, radius, left, top, width, height) {
 
 function stepGame(game, delta) {
   if (!Number.isFinite(delta) || delta <= 0 || game.phase === "ready" || game.phase === "paused") return;
-  const dt = Math.min(delta, 0.05);
+  const elapsed = Math.min(delta, 0.05);
   const c = game.config;
   const floor = c.height - c.groundHeight;
-  game.time += dt;
-  if (game.phase === "over") { game.overTime += dt; return; }
+  game.time += elapsed;
+  if (game.phase === "over") { game.overTime += elapsed; return; }
+  game.grace = Math.max(0, game.grace - elapsed);
+  if (game.notice) {
+    game.notice.remaining -= elapsed;
+    if (game.notice.remaining <= 0) game.notice = null;
+  }
+  for (const p of game.debris) {
+    p.life -= elapsed; p.x += p.vx * elapsed; p.y += p.vy * elapsed; p.vy += 300 * elapsed;
+  }
+  game.debris = game.debris.filter(p => p.life > 0);
+  if (game.power) {
+    game.power.remaining -= elapsed;
+    if (game.power.remaining <= 0) {
+      if (game.power.type === 'boost' || game.power.type === 'jetpack') game.grace = Math.max(game.grace, 0.8);
+      game.power = null;
+    }
+  }
+  const type = game.phase === 'playing' ? game.power?.type : undefined;
+  const dt = elapsed * (type === 'slow' ? 0.5 : 1);
+  const speed = c.forwardSpeed * (type === 'boost' ? 2.8 : 1);
 
-  game.bird.velocity += c.gravity * dt;
-  game.bird.y += game.bird.velocity * dt;
+  if (type === 'boost' && game.phase === 'playing') {
+    game.bird.y += (floor * 0.48 - game.bird.y) * Math.min(1, elapsed * 5);
+    game.bird.velocity = 0;
+  } else {
+    game.bird.velocity += (type === 'jetpack' ? c.gravity * 0.65 - (game.thrust ? 1100 : 0) : c.gravity) * dt;
+    if (type === 'jetpack') game.bird.velocity = Math.max(-155, Math.min(175, game.bird.velocity));
+    game.bird.y += game.bird.velocity * dt;
+  }
   if (game.bird.y < c.birdRadius) {
     game.bird.y = c.birdRadius;
     game.bird.velocity = 0;
   }
   if (game.phase === "falling") game.fallTime += dt;
   if (game.bird.y + c.birdRadius >= floor) {
+    if (game.phase === 'playing' && (game.grace > 0 || type === 'shield')) {
+      if (type === 'shield' && game.grace <= 0) {
+        game.power = null; game.grace = 1;
+        game.notice = { type: 'shield', label: 'HIT ABSORBED', remaining: 1.2 };
+      }
+      game.bird.y = floor - c.birdRadius - 2;
+      game.bird.velocity = -240;
+      return;
+    }
     game.bird.y = floor - c.birdRadius;
     game.bird.velocity = 0;
     game.phase = "over";
+    game.power = null; game.thrust = false;
     game.best = Math.max(game.best, game.score);
     return;
   }
   if (game.phase !== "playing") return;
 
-  game.groundOffset = (game.groundOffset + c.forwardSpeed * dt) % 24;
+  game.groundOffset = (game.groundOffset + speed * dt) % 24;
   if (!game.pipes.length) addPipe(game, c.width + 60);
-  for (const pipe of game.pipes) {
-    pipe.x -= c.forwardSpeed * dt;
+  for (const pickup of game.pickups) {
+    pickup.x -= speed * dt;
+    if (Math.hypot(pickup.x - c.birdX, pickup.y - game.bird.y) < c.birdRadius + 38) {
+      activatePower(game, pickup.type);
+      pickup.collected = true;
+    }
+  }
+  game.pickups = game.pickups.filter(p => !p.collected && p.x > -24);
+  for (const pipe of [...game.pipes]) {
+    pipe.x -= speed * dt;
     const gapTop = pipe.centerY - c.pipeGap / 2;
     const gapBottom = pipe.centerY + c.pipeGap / 2;
     const hit = circleTouchesRectangle(c.birdX, game.bird.y, c.birdRadius, pipe.x, 0, c.pipeWidth, gapTop) ||
       circleTouchesRectangle(c.birdX, game.bird.y, c.birdRadius, pipe.x, gapBottom, c.pipeWidth, floor - gapBottom);
+    if (game.power?.type === 'boost' && pipe.x < c.birdX + 45 && pipe.x + c.pipeWidth > c.birdX - 35) {
+      breakPipe(game, pipe);
+      continue;
+    }
     if (hit) {
+      if (game.power?.type === 'shield') {
+        game.power = null; game.grace = 1;
+        game.notice = { type: 'shield', label: 'HIT ABSORBED', remaining: 1.2 };
+        breakPipe(game, pipe);
+        continue;
+      }
+      if (game.grace > 0) continue;
       game.phase = "falling";
+      game.power = null; game.thrust = false;
       game.fallTime = 0;
       game.best = Math.max(game.best, game.score);
       return;
@@ -128,15 +234,35 @@ function createRecording(game) {
     config: { ...game.config }, frames: [] };
 }
 
+function resizeGameViewport(game, width) {
+  const birdX = Math.max(68, Math.round(width * 0.22));
+  const shift = birdX - game.config.birdX;
+  game.config.width = width;
+  game.config.birdX = birdX;
+  for (const item of [...game.pipes, ...game.pickups, ...game.debris]) item.x += shift;
+}
+
 function recordFrame(recording, game) {
-  const { phase, score, best, previousBest, bird, pipes, groundOffset, time, overTime, fallTime } = game;
+  const { phase, score, best, previousBest, bird, pipes, groundOffset, time, overTime, fallTime,
+    power, pickups, notice, debris, grace, thrust, powerSerial } = game;
   recording.frames.push({ phase, score, best, previousBest, bird: { ...bird },
-    pipes: pipes.map(pipe => ({ ...pipe })), groundOffset, time, overTime, fallTime });
+    pipes: pipes.map(pipe => ({ ...pipe })), groundOffset, time, overTime, fallTime,
+    power: power ? { ...power } : null, pickups: pickups.map(p => ({ ...p })),
+    notice: notice ? { ...notice } : null, debris: debris.map(p => ({ ...p })), grace, thrust, powerSerial,
+    viewport: { width: game.config.width, birdX: game.config.birdX } });
+}
+
+function applyReplayFrame(game, frame) {
+  Object.assign(game, { power: null, pickups: [], notice: null, debris: [], grace: 0, thrust: false, powerSerial: 0 }, frame);
+  if (frame.viewport) {
+    game.config.width = frame.viewport.width;
+    game.config.birdX = frame.viewport.birdX;
+  }
 }
 
 if (typeof module !== "undefined") module.exports = {
   getGameSettings, createGame, flapGame, stepGame, resetGame, togglePause,
-  createRecording, recordFrame
+  createRecording, recordFrame, activatePower, applyReplayFrame, resizeGameViewport
 };
 
 // A tiny bitmap font keeps the artwork self-contained and crisp offline.
@@ -200,7 +326,7 @@ function paintBackground(ctx, config) {
     ctx.fillRect(x - 25, floor - 65, 88, 65);
   }
   const heights = [35, 50, 28, 45, 61, 41, 53, 31, 49, 38, 56, 33];
-  heights.forEach((height, i) => {
+  Array.from({ length: Math.ceil(config.width / 27) + 1 }, (_, i) => heights[i % heights.length]).forEach((height, i) => {
     const x = i * 27 - 10;
     const top = floor - 24 - height;
     ctx.fillStyle = "#9bd2c2";
@@ -282,6 +408,8 @@ function drawBird(ctx, game, animationTime, reducedMotion) {
   const bob = ready && !reducedMotion ? Math.sin(animationTime * 5) * 3 : 0;
   let angle = Math.max(-0.35, Math.min(1.5, (game.bird.velocity - 70) / 380));
   if (ready) angle = 0;
+  if (game.power?.type === 'boost') angle = -0.06;
+  if (game.power?.type === 'jetpack') angle *= 0.3;
   if (game.phase === "falling") angle = Math.min(Math.PI / 2, 0.35 + game.fallTime * 4);
   if (game.phase === "over") angle = Math.PI / 2;
   ctx.save();
@@ -305,73 +433,216 @@ function drawBird(ctx, game, animationTime, reducedMotion) {
   ctx.restore();
 }
 
-function drawReady(ctx) {
-  pixelText(ctx, "FLAPPY BIRD", 144, 66, 3, "#f6dc67");
-  pixelText(ctx, "GET READY!", 144, 126, 3, "#f5d64c");
-  const hand = ["..oo.....", ".owwo....", ".owwo....", ".owwo....", ".owwooo..", ".owwwwwo.", "oowwwwwwo", "owwwwwwwo", ".owwwwwwo", "..owwwwo.", "..owwwwo.", "..oooooo."];
-  hand.forEach((row, y) => {
-    for (let x = 0; x < row.length; x++) if (row[x] !== ".") {
-      ctx.fillStyle = row[x] === "o" ? "#543847" : "#fffdf0";
-      ctx.fillRect(135 + x * 2, 262 + y * 2, 2, 2);
+const POWER_ICONS = {
+  jetpack: ['.##.##.', '#######', '#..#..#', '#######', '.##.##.', '.##.##.', '..#.#..'],
+  boost: ['....#..', '...###.', '..####.', '.#####.', '.####..', '###....', '#.#....'],
+  shield: ['#######', '#######', '##...##', '##.#.##', '.##.##.', '..###..', '...#...'],
+  slow: ['#######', '.#####.', '..###..', '...#...', '..###..', '.#####.', '#######'],
+  pulse: ['...#...', '.#.#.#.', '..###..', '#######', '..###..', '.#.#.#.', '...#...']
+};
+
+function powerIcon(ctx, type, x, y, scale = 2, color = '#fff5d7') {
+  ctx.fillStyle = color;
+  for (const [row, pixels] of POWER_ICONS[type].entries()) {
+    for (let col = 0; col < pixels.length; col++) {
+      if (pixels[col] === '#') ctx.fillRect(Math.round(x + (col - 3.5) * scale), Math.round(y + (row - 3.5) * scale), scale, scale);
     }
-  });
-  ctx.fillStyle = "#543847";
-  ctx.fillRect(163, 264, 43, 20);
-  ctx.fillStyle = "#f2644b";
-  ctx.fillRect(165, 266, 39, 16);
-  pixelText(ctx, "TAP", 185, 270, 1, "#fffdf0", null);
+  }
+}
+
+function drawPickup(ctx, pickup, time, reducedMotion) {
+  const { color } = POWERS[pickup.type];
+  const x = Math.round(pickup.x);
+  const y = Math.round(pickup.y + (reducedMotion ? 0 : Math.sin(time * 4) * 3));
+  ctx.save();
+  const glow = ctx.createRadialGradient(x, y, 4, x, y, 30);
+  glow.addColorStop(0, color + '80'); glow.addColorStop(1, color + '00');
+  ctx.fillStyle = glow; ctx.fillRect(x - 30, y - 30, 60, 60);
+  ctx.strokeStyle = color; ctx.lineWidth = 1;
+  ctx.strokeRect(x - 18, y - 18, 36, 36);
+  ctx.fillStyle = '#172c3a';
+  ctx.fillRect(x - 14, y - 16, 28, 32);
+  ctx.fillRect(x - 16, y - 12, 32, 24);
+  ctx.fillStyle = color; ctx.fillRect(x - 12, y - 15, 24, 2);
+  ctx.fillStyle = '#ffffff'; ctx.fillRect(x - 13, y - 13, 2, 8);
+  powerIcon(ctx, pickup.type, x, y, 2, color);
+  if (!reducedMotion) for (let i = 0; i < 3; i++) {
+    const a = time * 1.6 + i * Math.PI * 2 / 3;
+    ctx.fillStyle = '#fff5dc';
+    ctx.fillRect(Math.round(x + Math.cos(a) * 23), Math.round(y + Math.sin(a) * 23), 2, 2);
+  }
+  ctx.restore();
+}
+
+function drawPowerAtmosphere(ctx, game, reducedMotion) {
+  const type = game.power?.type;
+  if (!type) return;
+  const { width, height, groundHeight } = game.config;
+  const floor = height - groundHeight;
+  const colors = { boost: '#1e1a3ec9', slow: '#20194391', jetpack: '#3c243333', shield: '#07334444', pulse: '#53351844' };
+  ctx.fillStyle = colors[type]; ctx.fillRect(0, 0, width, floor);
+  if (reducedMotion) return;
+  ctx.save();
+  ctx.strokeStyle = POWERS[type].color;
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 24; i++) {
+    const fast = type === 'boost';
+    const x = width - ((game.time * (fast ? 650 : 45) + i * 73.31) % (width + 80));
+    const y = 24 + ((i * 97.13) % (floor - 48));
+    ctx.globalAlpha = 0.15 + (i % 4) * 0.08;
+    ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + (fast ? 18 + i % 25 : 2), y); ctx.stroke();
+  }
+  if (type === 'slow') {
+    ctx.globalAlpha = 0.16;
+    ctx.beginPath(); ctx.arc(width - 42, 130, 63, 0, Math.PI * 2); ctx.stroke();
+    for (let i = 0; i < 12; i++) {
+      const angle = i * Math.PI / 6;
+      ctx.beginPath(); ctx.moveTo(width - 42 + Math.cos(angle) * 53, 130 + Math.sin(angle) * 53);
+      ctx.lineTo(width - 42 + Math.cos(angle) * 60, 130 + Math.sin(angle) * 60); ctx.stroke();
+    }
+    ctx.beginPath(); ctx.moveTo(width - 42, 130); ctx.lineTo(width - 42 + Math.cos(game.time) * 42, 130 + Math.sin(game.time) * 42); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawPowerVehicle(ctx, game, reducedMotion) {
+  const type = game.power?.type;
+  const x = game.config.birdX;
+  const y = Math.round(game.bird.y);
+  const t = game.time;
+  const flame = reducedMotion ? 0 : Math.floor(t * 28) % 3;
+  ctx.save();
+  if (type === 'boost') {
+    const trail = ctx.createLinearGradient(0, y, x, y);
+    trail.addColorStop(0, '#ff694f00'); trail.addColorStop(1, '#ffb347aa');
+    ctx.fillStyle = trail; ctx.fillRect(0, y - 9, x, 20);
+    ctx.fillStyle = '#ff5a36';
+    ctx.beginPath(); ctx.moveTo(x - 24, y - 9); ctx.lineTo(x - 80 - flame * 6, y + 2); ctx.lineTo(x - 24, y + 14); ctx.fill();
+    ctx.fillStyle = '#ffcc63';
+    ctx.beginPath(); ctx.moveTo(x - 25, y - 6); ctx.lineTo(x - 65 - flame * 5, y + 2); ctx.lineTo(x - 25, y + 11); ctx.fill();
+    ctx.fillStyle = '#fff6c8'; ctx.fillRect(x - 42 - flame * 3, y - 2, 22 + flame * 3, 8);
+    // The bird rides a chunky, riveted rocket rather than changing its hitbox.
+    ctx.fillStyle = '#402c43'; ctx.fillRect(x - 27, y - 9, 66, 26);
+    ctx.fillStyle = '#b9d6dd'; ctx.fillRect(x - 24, y - 7, 56, 22);
+    ctx.fillStyle = '#f5f4da'; ctx.fillRect(x - 20, y - 6, 52, 6);
+    ctx.fillStyle = '#5e8392'; ctx.fillRect(x - 20, y + 10, 52, 5);
+    ctx.fillStyle = '#fa7352';
+    ctx.beginPath(); ctx.moveTo(x + 30, y - 8); ctx.lineTo(x + 51, y + 3); ctx.lineTo(x + 30, y + 16); ctx.fill();
+    ctx.fillRect(x - 18, y - 17, 14, 9); ctx.fillRect(x - 18, y + 16, 14, 9);
+    ctx.fillStyle = '#4a5267'; ctx.fillRect(x - 29, y - 8, 6, 24);
+    ctx.fillStyle = '#ffe6a3'; ctx.fillRect(x + 20, y - 3, 4, 4);
+    ctx.fillStyle = '#69e3ed'; ctx.fillRect(x - 2, y - 18, 23, 10);
+  } else if (type === 'jetpack') {
+    const hot = game.thrust;
+    ctx.fillStyle = '#543847'; ctx.fillRect(x - 25, y - 12, 12, 26);
+    ctx.fillStyle = '#91abb9'; ctx.fillRect(x - 23, y - 10, 9, 22);
+    ctx.fillStyle = '#e6eeee'; ctx.fillRect(x - 22, y - 9, 3, 18);
+    ctx.fillStyle = '#ff8c4b'; ctx.fillRect(x - 24, y - 3, 10, 5);
+    ctx.fillStyle = '#3b4257'; ctx.fillRect(x - 24, y + 10, 12, 5);
+    const length = hot ? 25 + flame * 5 : 8 + flame * 2;
+    ctx.fillStyle = '#ff653c'; ctx.fillRect(x - 22, y + 15, 8, length);
+    ctx.fillStyle = '#ffd46a'; ctx.fillRect(x - 20, y + 15, 4, length - 4);
+    ctx.fillStyle = '#fff7cc'; ctx.fillRect(x - 20, y + 15, 3, hot ? 13 : 4);
+  }
+  if (type === 'shield' || (game.grace > 0 && type !== 'boost')) {
+    const radius = type === 'shield' ? 29 : 25;
+    ctx.fillStyle = '#69f4dc22'; ctx.strokeStyle = '#c1fff2'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(x, y, radius, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+    ctx.strokeStyle = '#69f4dc'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(x, y, radius + 4, -1.2, 0.6); ctx.stroke();
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(x - 19, y - 19, 3, 3);
+  }
+  if (type === 'slow') {
+    for (let i = 3; i > 0; i--) {
+      ctx.globalAlpha = 0.1 + i * 0.015; pixelDisc(ctx, x - i * 12, y, 12 - i, '#d6baff');
+    }
+    ctx.globalAlpha = 1;
+  }
+  ctx.restore();
+}
+
+function drawPowerBurst(ctx, game, reducedMotion) {
+  const n = game.notice;
+  if (!n || reducedMotion) return;
+  const age = 1.6 - n.remaining;
+  const color = POWERS[n.type].color;
+  ctx.save();
+  if (n.type === 'pulse') {
+    ctx.strokeStyle = color;
+    for (let i = 0; i < 3; i++) {
+      const radius = Math.max(0, age * 350 - i * 28);
+      ctx.globalAlpha = Math.max(0, 0.8 - age * 0.55);
+      ctx.lineWidth = i === 0 ? 4 : 1;
+      ctx.beginPath(); ctx.arc(game.config.birdX, game.bird.y, radius, 0, Math.PI * 2); ctx.stroke();
+    }
+  }
+  if (age < 0.7) for (let i = 0; i < 14; i++) {
+    const angle = i * 2.39996;
+    const radius = 18 + age * (60 + i % 4 * 35);
+    ctx.globalAlpha = Math.max(0, 1 - age / 0.7); ctx.fillStyle = i % 3 ? color : '#fff8da';
+    ctx.fillRect(Math.round(game.config.birdX + Math.cos(angle) * radius), Math.round(game.bird.y + Math.sin(angle) * radius), 3, 3);
+  }
+  ctx.restore();
+}
+
+function drawPowerNotice(ctx, game) {
+  if (game.notice && game.phase === 'playing') {
+    const spec = POWERS[game.notice.type];
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, game.notice.remaining * 3);
+    pixelText(ctx, game.notice.label, game.config.width / 2, 60, 1, spec.color);
+    ctx.restore();
+  }
+}
+
+function drawReady(ctx, game) {
+  pixelText(ctx, 'FLAPPY BIRD', game.config.width / 2, 100, 3, '#fff0b0');
+  pixelText(ctx, 'TAP TO FLY', game.config.width / 2, 290, 1, '#fff9db');
 }
 
 function drawGameOver(ctx, game) {
-  pixelText(ctx, "GAME OVER", 144, 113, 3, "#f4bf50");
-  ctx.fillStyle = "#543847";
-  ctx.fillRect(35, 170, 218, 117);
-  ctx.fillStyle = "#f4e7ab";
-  ctx.fillRect(37, 172, 214, 112);
-  ctx.fillStyle = "#ded598";
-  ctx.fillRect(40, 176, 208, 105);
-  pixelText(ctx, "MEDAL", 87, 189, 1, "#817b54", null);
-  pixelDisc(ctx, 87, 232, 22, "#b6ae75");
-  pixelDisc(ctx, 87, 231, 19, "#c9c18a");
-  if (game.score >= 10) {
-    const color = game.score >= 30 ? "#f9d246" : game.score >= 20 ? "#d9e8e6" : "#dca16b";
-    pixelDisc(ctx, 87, 231, 19, "#fff2be");
-    pixelDisc(ctx, 87, 231, 16, color);
-    pixelText(ctx, "*", 87, 221, 2, "#ffffff", null);
-  }
-  pixelText(ctx, "SCORE", 207, 187, 1, "#817b54", null);
-  pixelText(ctx, game.score, 211, 202, 2);
-  pixelText(ctx, "BEST", 210, 235, 1, "#817b54", null);
-  pixelText(ctx, game.best, 211, 250, 2);
-  if (game.score > game.previousBest) pixelText(ctx, "NEW", 169, 255, 1, "#df6544", null);
-  ctx.fillStyle = "#543847";
-  ctx.fillRect(102, 310, 84, 34);
-  ctx.fillStyle = "#fff7d0";
-  ctx.fillRect(104, 312, 80, 30);
-  ctx.fillStyle = "#e96f3c";
-  ctx.fillRect(107, 315, 74, 24);
-  pixelText(ctx, "OK", 144, 319, 2);
+  const center = game.config.width / 2;
+  ctx.fillStyle = '#17283266'; ctx.fillRect(0, 0, game.config.width, game.config.height - game.config.groundHeight);
+  pixelText(ctx, 'GAME OVER', center, 138, 3, '#ffe0a0');
+  pixelText(ctx, 'SCORE ' + game.score, center, 204, 2);
+  pixelText(ctx, 'BEST ' + game.best, center, 235, 1, '#e1eadb');
+  pixelText(ctx, 'TAP TO RETRY', center, 300, 1, '#fff9db');
 }
 
 function drawGame(ctx, backdrop, game, animationTime, reducedMotion) {
   const c = game.config;
+  ctx.save();
+  if (!reducedMotion && game.power?.type === 'boost' && game.phase === 'playing') {
+    ctx.translate(Math.sin(game.time * 73) * 0.7, Math.cos(game.time * 61) * 0.7);
+  }
   ctx.drawImage(backdrop, 0, 0);
+  drawPowerAtmosphere(ctx, game, reducedMotion);
   for (const pipe of game.pipes) {
     const top = Math.round(pipe.centerY - c.pipeGap / 2);
     const bottom = Math.round(pipe.centerY + c.pipeGap / 2);
     drawPipe(ctx, pipe.x, 0, top, c.pipeWidth, true);
     drawPipe(ctx, pipe.x, bottom, c.height - c.groundHeight - bottom, c.pipeWidth, false);
   }
+  for (const pickup of game.pickups) drawPickup(ctx, pickup, game.time, reducedMotion);
+  for (const p of reducedMotion ? [] : game.debris) {
+    ctx.globalAlpha = Math.min(1, p.life * 2); ctx.fillStyle = p.color;
+    ctx.fillRect(Math.round(p.x), Math.round(p.y), 6, 9);
+  }
+  ctx.globalAlpha = 1;
   drawGround(ctx, game, animationTime, reducedMotion);
+  drawPowerVehicle(ctx, game, reducedMotion);
   drawBird(ctx, game, animationTime, reducedMotion);
-  if (game.phase !== "over") pixelText(ctx, game.score, c.width / 2, 23, 4);
-  if (game.phase === "ready") drawReady(ctx);
+  drawPowerBurst(ctx, game, reducedMotion);
+  ctx.restore();
+  drawPowerNotice(ctx, game);
+  if (game.phase !== "over" && game.phase !== 'ready') pixelText(ctx, game.score, c.width / 2, 23, 3);
+  if (game.phase === "ready") drawReady(ctx, game);
   if (game.phase === "over") drawGameOver(ctx, game);
   if (game.phase === "paused") {
     ctx.fillStyle = "#263b4266";
     ctx.fillRect(0, 0, c.width, c.height - c.groundHeight);
-    pixelText(ctx, "PAUSED", 144, 170, 3, "#f6dc67");
-    pixelText(ctx, "TAP TO RESUME", 144, 216, 1);
+    pixelText(ctx, "PAUSED", c.width / 2, 170, 3, "#f6dc67");
+    pixelText(ctx, "TAP TO RESUME", c.width / 2, 216, 1);
   }
   if (game.phase === "falling" && game.fallTime < 0.1 && !reducedMotion) {
     ctx.fillStyle = `rgba(255,255,255,${0.55 * (1 - game.fallTime / 0.1)})`;
@@ -385,6 +656,13 @@ function bootGame() {
   const status = document.querySelector("#game-status");
   const soundButton = document.querySelector("#sound");
   const pauseButton = document.querySelector("#pause");
+  const modeButtons = document.querySelectorAll('[data-mode]');
+  const settings = document.querySelector('#settings');
+  const settingsOpen = document.querySelector('#settings-open');
+  const fullscreenButton = document.querySelector('#fullscreen');
+  const screenStatus = document.querySelector('#screen-status');
+  let pausedForSettings = false;
+  let rocketMode = true;
   if (!ctx) { status.textContent = "This browser cannot display the game."; return; }
   ctx.imageSmoothingEnabled = false;
   let best = 0;
@@ -403,6 +681,7 @@ function bootGame() {
   let previousTime = performance.now();
   let accumulator = 0;
   let lastStatus = "";
+  let lastPowerSerial = 0;
   let recording;
   let playback;
   let playbackFrame = 0;
@@ -411,6 +690,54 @@ function bootGame() {
   const replayButton = document.querySelector('#watch-replay');
   const retryButton = document.querySelector('#retry-save');
   const pending = new Set();
+
+  function syncCanvas() {
+    if (canvas.width === game.config.width && canvas.height === game.config.height &&
+        backdrop.width === game.config.width && backdrop.height === game.config.height) return;
+    canvas.width = backdrop.width = game.config.width;
+    canvas.height = backdrop.height = game.config.height;
+    ctx.imageSmoothingEnabled = false;
+    paintBackground(backdrop.getContext('2d'), game.config);
+  }
+
+  function fitDisplay() {
+    const fullscreen = !!document.fullscreenElement;
+    document.body.classList.toggle('is-fullscreen', fullscreen);
+    fullscreenButton.textContent = fullscreen ? 'Exit full screen' : 'Enter full screen';
+    if (!playback) {
+      const bounds = document.querySelector('.playfield').getBoundingClientRect();
+      const width = fullscreen ? Math.max(200, Math.round(game.config.height * bounds.width / Math.max(1, bounds.height))) : 288;
+      resizeGameViewport(game, width);
+    }
+    syncCanvas();
+    previousTime = performance.now(); accumulator = 0;
+    scheduleFrame();
+  }
+
+  settingsOpen.addEventListener('click', () => {
+    pausedForSettings = !playback && game.phase === 'playing';
+    if (pausedForSettings) { game.thrust = false; togglePause(game); scheduleFrame(); }
+    settings.showModal();
+  });
+  settings.addEventListener('close', () => {
+    if (pausedForSettings && game.phase === 'paused') togglePause(game);
+    pausedForSettings = false;
+    previousTime = performance.now(); accumulator = 0;
+    canvas.focus({ preventScroll: true });
+    scheduleFrame();
+  });
+  fullscreenButton.addEventListener('click', async () => {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await document.documentElement.requestFullscreen();
+      screenStatus.textContent = 'Full screen fits the game to your display. Esc exits.';
+      settings.close();
+    } catch {
+      screenStatus.textContent = 'Full screen is unavailable in this browser window. Try opening the game in your browser.';
+    }
+  });
+  document.addEventListener('fullscreenchange', fitDisplay);
+  window.addEventListener('resize', fitDisplay);
 
   async function listRecordings() {
     try {
@@ -453,18 +780,29 @@ function bootGame() {
   function newGame() {
     playback = null;
     recording = null;
-    game = createGame(getGameSettings(), Math.random, best);
+    game = createGame({ ...getGameSettings(), rocketMode }, Math.random, best);
+    fitDisplay();
     paintBackground(backdrop.getContext('2d'), game.config);
     lastStatus = '';
+    lastPowerSerial = 0;
     replayButton.textContent = 'Watch replay';
+    if (!pending.size) recordingStatus.textContent = 'Games save automatically in recordings/.';
+    for (const button of modeButtons) button.setAttribute('aria-pressed', String((button.dataset.mode === 'rocket') === rocketMode));
     previousTime = performance.now();
     accumulator = 0;
     canvas.focus();
     scheduleFrame();
   }
 
+  for (const button of modeButtons) button.addEventListener('click', () => {
+    if (playback || !['ready', 'over'].includes(game.phase)) return;
+    rocketMode = button.dataset.mode === 'rocket';
+    for (const other of modeButtons) other.setAttribute('aria-pressed', String(other === button));
+    newGame();
+  });
+
   replayButton.addEventListener('click', async () => {
-    if (playback) { newGame(); return; }
+    if (playback) { newGame(); settings.close(); return; }
     if (!replaySelect.value || !['ready', 'over'].includes(game.phase)) return;
     try {
       const response = await fetch('/recordings/' + encodeURIComponent(replaySelect.value));
@@ -472,12 +810,15 @@ function bootGame() {
       const data = await response.json();
       if (data.version !== 1 || data.fps !== 120 || !data.frames?.length) throw new Error();
       game = createGame(data.config);
+      for (const button of modeButtons) button.setAttribute('aria-pressed', String((button.dataset.mode === 'rocket') === !!game.config.rocketMode));
       playback = data;
       playbackFrame = 0;
-      Object.assign(game, playback.frames[0]);
+      applyReplayFrame(game, playback.frames[0]);
+      syncCanvas();
       paintBackground(backdrop.getContext('2d'), game.config);
       replayButton.textContent = 'Back to game';
       recordingStatus.textContent = 'Watching ' + replaySelect.value;
+      settings.close();
       previousTime = performance.now();
       accumulator = 0;
       scheduleFrame();
@@ -494,7 +835,7 @@ function bootGame() {
       if (audio.state === "suspended") audio.resume().catch(() => {});
       const oscillator = audio.createOscillator();
       const gain = audio.createGain();
-      const [start, end, duration] = kind === "point" ? [880, 1320, 0.09] : kind === "hit" ? [150, 42, 0.16] : [650, 250, 0.055];
+      const [start, end, duration] = kind === 'power' ? [220, 1400, 0.32] : kind === "point" ? [880, 1320, 0.09] : kind === "hit" ? [150, 42, 0.16] : [650, 250, 0.055];
       oscillator.type = kind === "hit" ? "triangle" : "sine";
       oscillator.frequency.setValueAtTime(start, audio.currentTime);
       oscillator.frequency.exponentialRampToValueAtTime(end, audio.currentTime + duration);
@@ -508,12 +849,12 @@ function bootGame() {
   }
 
   function updateStatus() {
-    const current = `${game.phase}:${game.score}`;
+    const current = `${game.phase}:${game.score}:${game.powerSerial}:${game.power?.type || ''}`;
     if (current === lastStatus) return;
     lastStatus = current;
     const labels = {
       ready: "Get ready. Press Space, Arrow Up, click, or tap to start.",
-      playing: `Flying. Score ${game.score}.`,
+      playing: `Flying. Score ${game.score}.${game.power ? ' ' + POWERS[game.power.type].name + '. ' + POWERS[game.power.type].hint + '.' : ''}`,
       paused: "Paused. Press P or tap to resume.",
       falling: `Game over. Score ${game.score}.`,
       over: `Game over. Score ${game.score}. Best ${game.best}. Press Space or tap to try again.`
@@ -524,8 +865,9 @@ function bootGame() {
     if (playback) pauseButton.hidden = true;
     replaySelect.disabled = !playback && !['ready', 'over'].includes(game.phase);
     replayButton.disabled = replaySelect.disabled;
+    for (const button of modeButtons) button.disabled = !!playback || !['ready', 'over'].includes(game.phase);
     pauseButton.setAttribute("aria-label", game.phase === "paused" ? "Resume game" : "Pause game");
-    pauseButton.textContent = game.phase === "paused" ? "▶" : "Ⅱ";
+    pauseButton.textContent = game.phase === "paused" ? "Resume game" : "Pause game";
   }
 
   function scheduleFrame() {
@@ -542,7 +884,7 @@ function bootGame() {
     while (accumulator >= 1 / 120) {
       if (playback) {
         playbackFrame = Math.min(playbackFrame + 1, playback.frames.length - 1);
-        Object.assign(game, playback.frames[playbackFrame]);
+        applyReplayFrame(game, playback.frames[playbackFrame]);
       } else {
         stepGame(game, 1 / 120);
         if (recording && ['playing', 'falling', 'over'].includes(game.phase)) {
@@ -557,6 +899,10 @@ function bootGame() {
       accumulator -= 1 / 120;
     }
     if (game.score > oldScore) playSound("point");
+    if (game.powerSerial !== lastPowerSerial) {
+      if (game.powerSerial > lastPowerSerial) playSound('power');
+      lastPowerSerial = game.powerSerial;
+    }
     if (oldPhase === "playing" && ["falling", "over"].includes(game.phase)) {
       playSound("hit");
       if (!playback) {
@@ -564,6 +910,7 @@ function bootGame() {
         try { localStorage.setItem("flappybird-showcase.best", String(game.best)); } catch {}
       }
     }
+    syncCanvas();
     drawGame(ctx, backdrop, game, now / 1000, motion.matches);
     updateStatus();
     const animating = ["playing", "falling"].includes(game.phase) ||
@@ -572,10 +919,11 @@ function bootGame() {
   }
 
   function act() {
-    if (playback) return;
+    if (playback || settings.open) return;
     if (game.phase === "over") {
       if (game.overTime < 0.65) return;
       resetGame(game);
+      lastPowerSerial = 0;
     } else if (game.phase === "paused") togglePause(game);
     else if (flapGame(game)) {
       if (!recording) {
@@ -594,12 +942,24 @@ function bootGame() {
   canvas.addEventListener("pointerdown", event => {
     event.preventDefault();
     canvas.focus({ preventScroll: true });
+    game.thrust = true;
+    canvas.setPointerCapture?.(event.pointerId);
     act();
   });
+  const releaseThrust = () => { game.thrust = false; };
+  canvas.addEventListener('pointerup', releaseThrust);
+  canvas.addEventListener('pointercancel', releaseThrust);
+  canvas.addEventListener('lostpointercapture', releaseThrust);
+  window.addEventListener('blur', releaseThrust);
+  document.addEventListener('keyup', event => {
+    if (['Space', 'ArrowUp'].includes(event.code)) releaseThrust();
+  });
   document.addEventListener("keydown", event => {
-    if (playback) return;
+    if (playback || settings.open) return;
     if (event.repeat || event.target.closest("button, a, input, textarea, select")) return;
-    if (["Space", "ArrowUp"].includes(event.code)) { event.preventDefault(); act(); }
+    if (["Space", "ArrowUp"].includes(event.code)) {
+      event.preventDefault(); game.thrust = true; act();
+    }
     if (event.code === "KeyP") {
       event.preventDefault();
       togglePause(game);
@@ -615,11 +975,14 @@ function bootGame() {
   });
   pauseButton.addEventListener("click", () => {
     togglePause(game);
+    pausedForSettings = false;
+    settings.close();
     previousTime = performance.now();
     accumulator = 0;
     scheduleFrame();
   });
   document.addEventListener("visibilitychange", () => {
+    releaseThrust();
     if (!playback && document.hidden && game.phase === "playing") togglePause(game);
     if (frameRequest) cancelAnimationFrame(frameRequest);
     frameRequest = 0;
@@ -635,7 +998,6 @@ function bootGame() {
       navigator.sendBeacon('/api/recordings', new Blob([JSON.stringify(item)], { type: 'application/json' }));
     }
   });
-  document.querySelector("#version").textContent = "v" + document.querySelector('meta[name="application-version"]').content;
   scheduleFrame();
 }
 

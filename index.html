@@ -13,25 +13,38 @@
 <body>
   <main>
     <h1 class="sr-only">Flappy Bird Showcase</h1>
+    <nav class="toolbar" aria-label="Game controls">
+      <div class="mode-switch" role="group" aria-label="Game mode">
+        <button type="button" data-mode="classic" aria-pressed="false">Classic</button>
+        <button type="button" data-mode="rocket" aria-pressed="true">Overdrive</button>
+      </div>
+      <button id="settings-open" type="button">Settings</button>
+    </nav>
     <div class="playfield">
       <canvas id="game" width="288" height="512" tabindex="0" role="application" aria-label="Flappy Bird. Press Space or Arrow Up, click, or tap to flap.">
         This game needs JavaScript and a browser with canvas support.
       </canvas>
-      <button id="pause" class="pause-button" type="button" aria-label="Pause game" hidden>Ⅱ</button>
     </div>
     <p id="game-status" class="sr-only" role="status" aria-live="polite">Get ready to fly.</p>
-    <footer>
-      <span>Space / ↑ / tap <span class="pause-hint"> · P pause</span></span>
-      <button id="sound" type="button" aria-label="Game sound" aria-pressed="true">Sound: on</button>
-      <span id="version"></span>
-    </footer>
-    <section aria-label="Game recordings" class="recordings">
+  </main>
+  <dialog id="settings" aria-labelledby="settings-title">
+    <div class="settings-heading">
+      <h2 id="settings-title">Settings</h2>
+      <form method="dialog"><button type="submit">Close</button></form>
+    </div>
+    <button id="fullscreen" type="button">Enter full screen</button>
+    <p id="screen-status" role="status">Full screen fits the game to your display. Esc exits.</p>
+    <button id="pause" type="button" hidden>Pause game</button>
+    <button id="sound" type="button" aria-label="Game sound" aria-pressed="true">Sound: on</button>
+    <details class="recordings">
+      <summary>Recordings</summary>
       <label for="replays">Recordings</label>
       <select id="replays"><option value="">Choose a recording</option></select>
       <button id="watch-replay" type="button">Watch replay</button>
       <p id="recording-status" role="status">Games save automatically in recordings/.</p>
       <button id="retry-save" type="button" hidden>Retry saving</button>
-    </section>
-  </main>
+    </details>
+    <p class="controls-help">Space, ↑ or tap to flap. Hold to rise with a jetpack. P pauses.</p>
+  </dialog>
 </body>
 </html>
